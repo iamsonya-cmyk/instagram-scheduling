@@ -58,6 +58,9 @@ section{margin-bottom:46px;scroll-margin-top:56px}
 .pcard:hover{background:#fafaf9}
 .pname{font-weight:600;font-size:15px;margin-bottom:8px}
 .psub{color:var(--mute);font-size:12px;margin-top:8px}
+.pselect{appearance:none;-webkit-appearance:none;border:0;border-radius:999px;padding:2px 24px 2px 10px;font-size:12.5px;line-height:20px;background-color:var(--bg);color:var(--fg);cursor:pointer;max-width:100%;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6'><path d='M1 1l4 4 4-4' fill='none' stroke='%23555' stroke-width='1.5'/></svg>");background-repeat:no-repeat;background-position:right 9px center}
+.pselect:hover{filter:brightness(.97)}
 .empty{color:var(--mute);padding:24px 4px}
 /* kanban */
 .kanban{display:flex;gap:12px;overflow-x:auto;align-items:flex-start;padding-bottom:14px}
@@ -190,7 +193,7 @@ label{display:block;font-size:12.5px;font-weight:600;color:var(--mute);margin:12
 <script>
 /* ===== 설정: Supabase 대시보드 > Project Settings > API 에서 복사해 붙여넣기 ===== */
 const SUPABASE_URL = 'https://glgoiamxjeqpnjrlqfar.supabase.co';
-const SUPABASE_ANON_KEY = 'sb_publishable_WHBU4d7e9TKP0g-4cdsAOg_YyBcDJqT';
+const SUPABASE_ANON_KEY = 'Ysb_publishable_WHBU4d7e9TKP0g-4cdsAOg_YyBcDJqT';
 const BUCKET = 'attachments';
 /* ================================================================================ */
 
@@ -220,14 +223,14 @@ const fmtDate = d => { const [y,m,dd] = d.split('-'); return `${y}년 ${+m}월 $
 const shiftMonth = (k,n) => { const [y,m] = k.split('-').map(Number); const d = new Date(y, m-1+n, 1); return `${d.getFullYear()}-${pad(d.getMonth()+1)}`; };
 const fmtSize = b => b < 1024 ? b+'B' : b < 1048576 ? (b/1024).toFixed(1)+'KB' : (b/1048576).toFixed(1)+'MB';
 const stLabel = k => (COLS.find(s => s.key === k) || COLS[0]).label;
-const colOf = t => (t.status === 'uploaded' && t.project_month < cur()) ? 'archive' : t.status;
+const colOf = t => (t.status === 'uploaded' && projStatus(t.project_month) === 'done') ? 'archive' : t.status;
 const typeCls = t => t === '카드뉴스' ? 'ty-card' : t === '릴스' ? 'ty-reels' : 'ty-etc';
 const lsGet = k => { try { return localStorage.getItem(k) || ''; } catch(e) { return ''; } };
 const lsSet = (k,v) => { try { localStorage.setItem(k,v); } catch(e) {} };
 const chip = (cls, label, dot=true) => `<span class="chip ${dot?'dot':''} ${cls}">${esc(label)}</span>`;
 
 let db = null;
-let tasks = [], files = [];
+let tasks = [], files = [], projRows = {};
 let taskView = 'kanban', taskMonth = 'all', taskQ = '', projFilter = 'all';
 let calMonth = cur();
 let editingId = null, pending = [], projTouched = false, dragId = null;
@@ -241,12 +244,16 @@ const fileUrl = f => db.storage.from(BUCKET).getPublicUrl(f.path, {download: f.n
 
 /* ---------- 데이터 ---------- */
 async function loadAll(){
-  const [t,f] = await Promise.all([
+  const [t,f,p] = await Promise.all([
     db.from('tasks').select('*').order('created_at',{ascending:true}),
-    db.from('task_files').select('*').order('created_at',{ascending:true})
+    db.from('task_files').select('*').order('created_at',{ascending:true}),
+    db.from('projects').select('*')
   ]);
   if (t.error || f.error){ console.error(t.error || f.error); toast('불러오기 오류: ' + (t.error || f.error).message); return; }
   tasks = t.data; files = f.data;
+  projRows = {};
+  if (p.error) console.warn('projects 테이블을 읽지 못했어요 (SQL 추가 실행 필요):', p.error.message);
+  else p.data.forEach(r => { projRows[r.month] = r.status; });
   render();
 }
 let syncTimer;
@@ -322,7 +329,9 @@ function projectKeys(){
   s.add(cur());
   return [...s].sort();
 }
-function projStatus(k){ const c = cur(); return k < c ? 'done' : k === c ? 'prog' : 'todo'; }
+/* 직접 바꾼 상태가 있으면 그 값, 없으면 달 기준 자동값(지난 달=완료, 이번 달=진행 중, 다음 달 이후=시작되지 않음) */
+function autoProjStatus(k){ const c = cur(); return k < c ? 'done' : k === c ? 'prog' : 'todo'; }
+function projStatus(k){ return projRows[k] || autoProjStatus(k); }
 
 function renderProjects(){
   document.querySelectorAll('[data-ptab]').forEach(b => b.classList.toggle('on', b.dataset.ptab === projFilter));
@@ -330,10 +339,10 @@ function renderProjects(){
   $('#gallery').innerHTML = keys.length ? keys.map(k => {
     const list = tasks.filter(t => t.project_month === k);
     const up = list.filter(t => t.status === 'uploaded').length;
-    const ps = PSTAT[projStatus(k)];
+    const cs = projStatus(k);
     return `<div class="pcard" data-month="${k}">
       <div class="pname">📁 ${esc(projName(k))}</div>
-      ${chip(ps.cls, ps.label)}
+      <select class="pselect ${PSTAT[cs].cls}" data-pstat="${k}" aria-label="프로젝트 상태">${Object.keys(PSTAT).map(s => `<option value="${s}" ${s === cs ? 'selected' : ''}>${PSTAT[s].label}</option>`).join('')}</select>
       <div class="psub">작업 ${list.length}건${list.length ? ` · 업로드 완료 ${up}` : ''}</div>
     </div>`;
   }).join('') : `<div class="empty">해당하는 프로젝트가 없어요.</div>`;
@@ -471,6 +480,7 @@ document.addEventListener('click', e => {
   const dp = t.closest('[data-delpending]'); if (dp){ pending.splice(+dp.dataset.delpending, 1); renderFileList(); return; }
   if (t.id === 'mask'){ closeModal(); return; }
   if (t.closest('#sheet')) return;
+  if (t.closest('[data-pstat]')) return;
   const pt = t.closest('[data-ptab]'); if (pt){ projFilter = pt.dataset.ptab; renderProjects(); return; }
   const tv = t.closest('[data-tview]'); if (tv){ taskView = tv.dataset.tview; renderTasks(); return; }
   const nc = t.closest('[data-newcol]'); if (nc){ openModal(null, {status: nc.dataset.newcol, project: taskMonth !== 'all' ? taskMonth : cur()}); return; }
@@ -485,6 +495,13 @@ document.addEventListener('click', e => {
   const day = t.closest('[data-day]'); if (day){ openModal(null, {date: day.dataset.day}); return; }
 });
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+document.addEventListener('change', async e => {
+  const s = e.target.closest && e.target.closest('[data-pstat]'); if (!s || !db) return;
+  const month = s.dataset.pstat, status = s.value;
+  projRows[month] = status; render();
+  const r = await db.from('projects').upsert({month, status, updated_at: new Date().toISOString()});
+  if (r.error){ console.error(r.error); toast('프로젝트 상태 저장 오류: ' + r.error.message); await loadAll(); }
+});
 $('#t-q').addEventListener('input', e => { taskQ = e.target.value; renderTasks(); });
 $('#t-month').addEventListener('change', e => { taskMonth = e.target.value; renderTasks(); });
 
@@ -520,6 +537,7 @@ document.addEventListener('drop', e => {
   db.channel('ig-sync')
     .on('postgres_changes', {event:'*', schema:'public', table:'tasks'}, scheduleReload)
     .on('postgres_changes', {event:'*', schema:'public', table:'task_files'}, scheduleReload)
+    .on('postgres_changes', {event:'*', schema:'public', table:'projects'}, scheduleReload)
     .subscribe();
 })();
 </script>
