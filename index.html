@@ -61,6 +61,8 @@ section{margin-bottom:46px;scroll-margin-top:56px}
 .pselect{appearance:none;-webkit-appearance:none;border:0;border-radius:999px;padding:2px 24px 2px 10px;font-size:12.5px;line-height:20px;background-color:var(--bg);color:var(--fg);cursor:pointer;max-width:100%;
   background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6'><path d='M1 1l4 4 4-4' fill='none' stroke='%23555' stroke-width='1.5'/></svg>");background-repeat:no-repeat;background-position:right 9px center}
 .pselect:hover{filter:brightness(.97)}
+.padd{display:flex;align-items:center;justify-content:center;border-style:dashed;color:var(--mute);min-height:92px;font-weight:600}
+.pdel{border:0;background:transparent;color:var(--danger);font-size:12px;padding:6px 0 0;display:block}
 .empty{color:var(--mute);padding:24px 4px}
 /* kanban */
 .kanban{display:flex;gap:12px;overflow-x:auto;align-items:flex-start;padding-bottom:14px}
@@ -193,7 +195,7 @@ label{display:block;font-size:12.5px;font-weight:600;color:var(--mute);margin:12
 <script>
 /* ===== 설정: Supabase 대시보드 > Project Settings > API 에서 복사해 붙여넣기 ===== */
 const SUPABASE_URL = 'https://glgoiamxjeqpnjrlqfar.supabase.co';
-const SUPABASE_ANON_KEY = 'Ysb_publishable_WHBU4d7e9TKP0g-4cdsAOg_YyBcDJqT';
+const SUPABASE_ANON_KEY = 'sb_publishable_WHBU4d7e9TKP0g-4cdsAOg_YyBcDJqT';
 const BUCKET = 'attachments';
 /* ================================================================================ */
 
@@ -327,6 +329,7 @@ function render(){ renderProjects(); renderTasks(); renderCalendar(); }
 function projectKeys(){
   const s = new Set(tasks.map(t => t.project_month).filter(Boolean));
   s.add(cur());
+  Object.keys(projRows).forEach(k => s.add(k));
   return [...s].sort();
 }
 /* 직접 바꾼 상태가 있으면 그 값, 없으면 달 기준 자동값(지난 달=완료, 이번 달=진행 중, 다음 달 이후=시작되지 않음) */
@@ -336,7 +339,7 @@ function projStatus(k){ return projRows[k] || autoProjStatus(k); }
 function renderProjects(){
   document.querySelectorAll('[data-ptab]').forEach(b => b.classList.toggle('on', b.dataset.ptab === projFilter));
   const keys = projectKeys().filter(k => projFilter === 'all' || projStatus(k) === projFilter);
-  $('#gallery').innerHTML = keys.length ? keys.map(k => {
+  $('#gallery').innerHTML = (keys.length ? keys.map(k => {
     const list = tasks.filter(t => t.project_month === k);
     const up = list.filter(t => t.status === 'uploaded').length;
     const cs = projStatus(k);
@@ -344,8 +347,9 @@ function renderProjects(){
       <div class="pname">📁 ${esc(projName(k))}</div>
       <select class="pselect ${PSTAT[cs].cls}" data-pstat="${k}" aria-label="프로젝트 상태">${Object.keys(PSTAT).map(s => `<option value="${s}" ${s === cs ? 'selected' : ''}>${PSTAT[s].label}</option>`).join('')}</select>
       <div class="psub">작업 ${list.length}건${list.length ? ` · 업로드 완료 ${up}` : ''}</div>
+      ${!list.length && projRows[k] ? `<button class="pdel" data-delproj="${k}">삭제</button>` : ''}
     </div>`;
-  }).join('') : `<div class="empty">해당하는 프로젝트가 없어요.</div>`;
+  }).join('') : `<div class="empty">해당하는 프로젝트가 없어요.</div>`) + `<div class="pcard padd" data-newproj="1">＋ 새 프로젝트</div>`;
 }
 
 function visibleTasks(){
@@ -472,6 +476,40 @@ function renderFileList(){
 }
 function closeModal(){ $('#mask').classList.remove('on'); editingId = null; pending = []; }
 
+/* ---------- 새 프로젝트 ---------- */
+function openProjModal(){
+  editingId = null; pending = [];
+  const used = new Set(projectKeys());
+  let k = cur(); while (used.has(k)) k = shiftMonth(k, 1);   // 아직 없는 가장 가까운 달을 기본값으로
+  $('#sheet').innerHTML = `<h3>새 프로젝트</h3>
+    <label>월</label><input type="month" id="p-month" value="${k}">
+    <label>상태</label><select id="p-status">${Object.keys(PSTAT).map(s => `<option value="${s}" ${s === autoProjStatus(k) ? 'selected' : ''}>${PSTAT[s].label}</option>`).join('')}</select>
+    <div class="actions"><button class="btn ghost" id="btn-cancel">닫기</button><button class="btn" id="p-save">만들기</button></div>`;
+  $('#mask').classList.add('on');
+  $('#p-month').addEventListener('change', () => { const v = $('#p-month').value; if (v) $('#p-status').value = autoProjStatus(v); });
+  $('#btn-cancel').onclick = closeModal;
+  $('#p-save').onclick = createProject;
+}
+async function createProject(){
+  const month = $('#p-month').value;
+  if (!month){ toast('월을 선택해 주세요'); return; }
+  if (projectKeys().includes(month)){ toast(`${projName(month)} 프로젝트가 이미 있어요`); return; }
+  if (!db){ toast('Supabase 연결을 먼저 설정해 주세요'); return; }
+  const status = $('#p-status').value;
+  const btn = $('#p-save'); btn.disabled = true;
+  const r = await db.from('projects').upsert({month, status, updated_at: new Date().toISOString()});
+  if (r.error){ console.error(r.error); toast('프로젝트 만들기 오류: ' + r.error.message); btn.disabled = false; return; }
+  projRows[month] = status; projFilter = 'all';
+  closeModal(); render(); toast(`${projName(month)} 프로젝트를 만들었어요`);
+}
+async function deleteProject(k){
+  if (tasks.some(t => t.project_month === k)){ toast('작업이 있는 프로젝트는 삭제할 수 없어요'); return; }
+  if (!db || !confirm(`${projName(k)} 프로젝트를 삭제할까요?`)) return;
+  const r = await db.from('projects').delete().eq('month', k);
+  if (r.error){ console.error(r.error); toast('삭제 오류: ' + r.error.message); return; }
+  delete projRows[k]; render(); toast('삭제했어요');
+}
+
 /* ---------- 이벤트 ---------- */
 document.addEventListener('click', e => {
   const t = e.target;
@@ -480,6 +518,8 @@ document.addEventListener('click', e => {
   const dp = t.closest('[data-delpending]'); if (dp){ pending.splice(+dp.dataset.delpending, 1); renderFileList(); return; }
   if (t.id === 'mask'){ closeModal(); return; }
   if (t.closest('#sheet')) return;
+  const dpj = t.closest('[data-delproj]'); if (dpj){ deleteProject(dpj.dataset.delproj); return; }
+  if (t.closest('[data-newproj]')){ openProjModal(); return; }
   if (t.closest('[data-pstat]')) return;
   const pt = t.closest('[data-ptab]'); if (pt){ projFilter = pt.dataset.ptab; renderProjects(); return; }
   const tv = t.closest('[data-tview]'); if (tv){ taskView = tv.dataset.tview; renderTasks(); return; }
